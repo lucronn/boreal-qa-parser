@@ -1,0 +1,22 @@
+[project]
+name = "boreal-qa-parser"
+version = "0.1.0"
+description = "A CLI tool to parse Boreal pre-flight findings and view Alignerr PR status dashboards"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.0.0",
+    "requests>=2.25.0",
+    "rich>=12.0.0"
+]
+
+[project.scripts]
+boreal-cli = "cli:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+include = ["/*.py"]
+
