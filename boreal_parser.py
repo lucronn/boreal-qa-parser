@@ -29,12 +29,6 @@ def parse_boreal_comment(body):
     res["has_boreal_section"] = True
     
     # Try to extract grader QA result summary
-    # Format:
-    # - [emoji] Grade: `[grade]`
-    # - Score: `[score]`
-    # - Minimum axis score: `[score]`
-    # - Model: `[model]`
-    # - Summary: [summary]
     grade_match = re.search(r'-\s*(?:✅|⚠️|❌)\s*Grade:\s*`([^`]+)`', body)
     score_match = re.search(r'-\s*Score:\s*`([^`]+)`', body)
     min_axis_match = re.search(r'-\s*Minimum axis score:\s*`([^`]+)`', body)
@@ -122,14 +116,74 @@ def parse_trusted_ci_metadata(body):
             content = m.group(2).strip()
             
             source_m = re.search(r'Source:\s*`([^`]+)`', content)
+            severity_m = re.search(r'Severity:\s*`([^`]+)`', content)
             problem_m = re.search(r'Problem:\s*(.*?)(?=Suggested fix:|$)', content, re.DOTALL)
             fix_m = re.search(r'Suggested fix:\s*(.*)', content, re.DOTALL)
             
             res["required_fixes"].append({
                 "title": title,
                 "source": source_m.group(1).strip() if source_m else "unknown",
+                "severity": severity_m.group(1).strip() if severity_m else "error",
                 "problem": problem_m.group(1).strip() if problem_m else "",
                 "suggested_fix": fix_m.group(1).strip() if fix_m else ""
             })
             
+    return res
+
+def parse_auto_qa_assessment(body):
+    """
+    Parses Auto QA Assessment section from the comment.
+    """
+    res = {
+        "has_auto_qa": False,
+        "overall": "unknown",
+        "confidence": "unknown",
+        "summary": "",
+        "issues": []
+    }
+    
+    if "### Auto QA Assessment" not in body:
+        return res
+        
+    res["has_auto_qa"] = True
+    
+    # Split to get Auto QA section
+    section = body.split("### Auto QA Assessment")[1].split("###")[0].split("<details")[0]
+    
+    overall_m = re.search(r'-\s*Overall:\s*`([^`]+)`', section, re.IGNORECASE) or re.search(r'-\s*Overall:\s*([^\n]+)', section, re.IGNORECASE)
+    confidence_m = re.search(r'-\s*Confidence:\s*`([^`]+)`', section, re.IGNORECASE) or re.search(r'-\s*Confidence:\s*([^\n]+)', section, re.IGNORECASE)
+    
+    if overall_m:
+        res["overall"] = overall_m.group(1).strip().replace("`", "")
+    if confidence_m:
+        res["confidence"] = confidence_m.group(1).strip().replace("`", "")
+        
+    # The summary is usually the text right below the bullet points
+    lines = [l.strip() for l in section.split('\n') if l.strip()]
+    summary_lines = []
+    issues = []
+    
+    recording_summary = False
+    recording_issues = False
+    
+    for line in lines:
+        if line.startswith("- Overall:") or line.startswith("- Confidence:"):
+            recording_summary = True
+            continue
+        if "Issues Auto QA considers blocking:" in line or "Issues " in line:
+            recording_summary = False
+            recording_issues = True
+            continue
+        
+        if recording_issues:
+            if line.startswith("-"):
+                issues.append(line.lstrip("-").strip())
+            else:
+                if issues:
+                    issues[-1] += " " + line
+        elif recording_summary:
+            summary_lines.append(line)
+            
+    res["summary"] = " ".join(summary_lines)
+    res["issues"] = issues
     return res

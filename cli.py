@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 from rich.status import Status
-from boreal_parser import parse_boreal_comment, parse_trusted_ci_metadata
+from boreal_parser import parse_boreal_comment, parse_trusted_ci_metadata, parse_auto_qa_assessment
 
 console = Console()
 
@@ -89,13 +89,13 @@ def list_prs(repo, state):
         
     repos_to_check = [repo] if repo else get_repositories(headers)
     
-    table = Table(title="Alignerr PR Status & Boreal Findings Dashboard")
+    table = Table(title="Alignerr PR Status & Findings Dashboard")
     table.add_column("Repository", style="cyan")
     table.add_column("PR # / Title", style="white")
     table.add_column("State", style="bold")
     table.add_column("CI Decision", style="magenta")
     table.add_column("Boreal Grade", style="yellow")
-    table.add_column("Findings", style="red")
+    table.add_column("Findings/Fixes", style="red")
     
     with console.status("[bold green]Fetching Pull Requests and Comment Logs...") as status:
         for r_name in repos_to_check:
@@ -124,13 +124,16 @@ def list_prs(repo, state):
                         ci_meta = parse_trusted_ci_metadata(body)
                         if ci_meta["decision"] != "unknown":
                             decision = ci_meta["decision"]
+                            num_findings += len(ci_meta["required_fixes"])
                             
                     # Parse Boreal results
                     parsed_boreal = parse_boreal_comment(body)
                     if parsed_boreal["has_boreal_section"]:
                         if parsed_boreal["grader_qa_result"]:
                             boreal_grade = parsed_boreal["grader_qa_result"]["grade"].upper()
-                        num_findings = len(parsed_boreal["findings"])
+                        # Only add pre-flight findings if not already counted in required fixes
+                        if not num_findings:
+                            num_findings += len(parsed_boreal["findings"])
                         break
                 
                 state_style = "green" if pr_state == "OPEN" else "grey50"
@@ -152,7 +155,7 @@ def list_prs(repo, state):
 @click.argument("repo")
 @click.argument("pr_number", type=int)
 def view_pr(repo, pr_number):
-    """View detailed Boreal QA pre-flight findings and CI grade for a specific PR."""
+    """View detailed pre-flight findings (Boreal, Taiga, Auto QA, Trusted CI, etc.) for a specific PR."""
     token = get_gh_token()
     headers = get_headers(token)
     
@@ -185,6 +188,7 @@ def view_pr(repo, pr_number):
     # Parse latest comments
     boreal_results = None
     ci_metadata = None
+    auto_qa_results = None
     
     for c in reversed(comments):
         body = c.get("body", "")
@@ -192,20 +196,44 @@ def view_pr(repo, pr_number):
             boreal_results = parse_boreal_comment(body)
         if "<!-- lbx-trusted-ci-grade -->" in body or "Decision:" in body:
             ci_metadata = parse_trusted_ci_metadata(body)
+        if "### Auto QA Assessment" in body:
+            auto_qa_results = parse_auto_qa_assessment(body)
             
     if ci_metadata:
         decision_text = f"[bold]Decision:[/bold] {ci_metadata['decision']}\n[bold]Next action:[/bold] {ci_metadata['next_action']}"
         console.print(Panel(decision_text, title="CI Grade Summary", border_style="magenta"))
         
         if ci_metadata["required_fixes"]:
-            console.print("\n[bold red]Required Fixes:[/bold red]")
-            for idx, fix in enumerate(ci_metadata["required_fixes"], 1):
-                console.print(f"{idx}. [bold]{fix['title']}[/bold] (Source: `{fix['source']}`)")
-                if fix['problem']:
-                    console.print(f"   [yellow]Problem:[/yellow] {fix['problem']}")
-                if fix['suggested_fix']:
-                    console.print(f"   [green]Suggested Fix:[/green] {fix['suggested_fix']}")
-                    
+            # Group fixes by source
+            fixes_by_source = {}
+            for fix in ci_metadata["required_fixes"]:
+                source = fix["source"]
+                if source not in fixes_by_source:
+                    fixes_by_source[source] = []
+                fixes_by_source[source].append(fix)
+                
+            console.print("\n[bold red]Required Fixes (By Check Source):[/bold red]")
+            for source, fixes in fixes_by_source.items():
+                console.print(f"\n  [bold cyan]● Check Source: {source.upper()}[/bold cyan]")
+                for idx, fix in enumerate(fixes, 1):
+                    sev_color = "red" if fix.get('severity') == "error" or fix.get('severity') == "critical" else "yellow"
+                    console.print(f"    {idx}. [{sev_color}][bold]{fix.get('severity', 'ERROR').upper()}[/bold][/{sev_color}] [bold]{fix['title']}[/bold]")
+                    if fix['problem']:
+                        console.print(f"       [yellow]Problem:[/yellow] {fix['problem']}")
+                    if fix['suggested_fix']:
+                        console.print(f"       [green]Suggested Fix:[/green] {fix['suggested_fix']}")
+                        
+    if auto_qa_results and auto_qa_results["has_auto_qa"]:
+        qa_text = (
+            f"[bold]Overall Status:[/bold] {auto_qa_results['overall'].upper()} | [bold]Confidence:[/bold] {auto_qa_results['confidence'].upper()}\n"
+            f"[italic]{auto_qa_results['summary']}[/italic]"
+        )
+        console.print(Panel(qa_text, title="Auto QA Assessment Results", border_style="blue"))
+        if auto_qa_results["issues"]:
+            console.print("\n[bold red]Auto QA Blocking Issues:[/bold red]")
+            for idx, issue in enumerate(auto_qa_results["issues"], 1):
+                console.print(f"  - {issue}")
+                
     if boreal_results and boreal_results["has_boreal_section"]:
         if boreal_results["grader_qa_result"]:
             qa = boreal_results["grader_qa_result"]
@@ -225,8 +253,6 @@ def view_pr(repo, pr_number):
                     console.print(f"   - {detail}")
         else:
             console.print("\n[green]No Boreal pre-flight findings found![/green]")
-    else:
-        console.print("\n[yellow]No Boreal pre-flight feedback found in comments.[/yellow]")
 
 if __name__ == "__main__":
     cli()
