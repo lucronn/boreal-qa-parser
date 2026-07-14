@@ -78,7 +78,8 @@ def cli():
 
 @cli.command("list")
 @click.option("--repo", default=None, help="Filter by a specific repository name.")
-@click.option("--state", type=click.Choice(["open", "closed", "all"]), default="all", help="Filter PRs by state.")
+@click.option("--state", type=click.Choice(["open", "closed", "all"]), default="open", help="Filter PRs by state.")
+
 def list_prs(repo, state):
     """List all PRs and their status across Alignerr repositories."""
     token = get_gh_token()
